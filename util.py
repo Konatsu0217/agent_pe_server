@@ -114,7 +114,7 @@ async def call_rag(client: httpx.AsyncClient, query: str, top_k: int) -> List[Di
 # ======= util: 获取会话历史记录 =======
 async def fetch_session_history(client: httpx.AsyncClient, session_id: Optional[str]) -> List[Dict[str, str]]:
     """从外部服务获取会话历史记录"""
-    if not session_id or not config.get('pe_session_history_service_url'):
+    if not session_id or not config.get('pe_session_history_service_url') or not config['pe_enable_history']:
         return []
     
     try:

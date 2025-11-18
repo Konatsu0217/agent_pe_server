@@ -131,24 +131,9 @@ async def build_request(req: BuildRequest):
         
         # system prompt加载（线程池任务）
         tasks.append(asyncio.to_thread(load_system_prompt, config['pe_system_prompt_path']))
-        
-        # tools发现（条件启用）
-        if config['pe_enable_tools']:
-            tasks.append(discover_tools(httpx_client))
-        else:
-            tasks.append(asyncio.create_task(asyncio.sleep(0)))  # 空任务
-        
-        # rag调用（条件启用）
-        if config['pe_enable_rag']:
-            tasks.append(call_rag(httpx_client, user_query, config['pe_rag_top_k']))
-        else:
-            tasks.append(asyncio.create_task(asyncio.sleep(0)))  # 空任务
-        
-        # 会话历史获取（条件启用）
-        if config['pe_enable_history']:
-            tasks.append(fetch_session_history(httpx_client, session_id))
-        else:
-            tasks.append(asyncio.create_task(asyncio.sleep(0)))  # 空任务
+        tasks.append(discover_tools(httpx_client))
+        tasks.append(call_rag(httpx_client, user_query, config['pe_rag_top_k']))
+        tasks.append(fetch_session_history(httpx_client, session_id))
         
         # 设置超时控制
         timeout_seconds = config.get('pe_external_service_timeout', 2)
@@ -239,6 +224,8 @@ async def build_request(req: BuildRequest):
 
     processing_time = (time.time() - start_time) * 1000
     print(f"Request processed in {processing_time:.2f}ms")
+
+    print(f"LLM Request: {llm_request}")
 
     return BuildResponse(
         llm_request=llm_request,
