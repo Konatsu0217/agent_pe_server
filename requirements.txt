@@ -2,3 +2,5 @@ fastapi>=0.95.0
 uvicorn>=0.22.0
 pydantic>=2.0.0
 requests~=2.32.5
+httpx>=0.24.0
+tiktoken>=0.5.0

@@ -1,30 +1,41 @@
 {
   "server": {
     "port": 25535,
-    "workers": "auto",
-    "limit_concurrency": 100,
-    "backlog": 512,
-    "reload": true
+    "workers": 1,
+    "limit_concurrency": 50,
+    "backlog": 1024,
+    "reload": false,
+    "timeout_keep_alive": 5
   },
-  "ring": {
-    "node_capacity": 10,
-    "patch_lifetime": 8,
-    "ring_size": 4
-  },
-  "consumption": {
-    "check_url": "http://localhost:3456/api/consumption-status",
-    "check_timeout": 5,
-    "max_retry_count": 99,
-    "retry_interval": 1
-  },
-  "queue": {
-    "batch_size": 100,
-    "empty_sleep_time": 0.01
-  },
-  "main_server": {
-    "consume_url": "http://localhost:3456/api/danmaku/consume",
+  "build_prompts_api": {
+    "url": "/api/build-prompts",
     "timeout": 5,
     "max_retry_count": 3,
     "retry_interval": 3
+  },
+  "change_config_api": {
+    "url": "/api/change-config",
+    "timeout": 5,
+    "max_retry_count": 3,
+    "retry_interval": 3
+  },
+  "pe_settings": {
+    "api_url": "/api/build_prompt",
+    "enable_history": false,
+    "history_max_rounds": 6,
+    "enable_tools": true,
+    "enable_rag": true,
+    "max_token_budget": 7000,
+    "system_prompt_path": "systemPrompt.json",
+    "tool_service_url": "http://localhost:8000/tool/get_tool_list",
+    "rag_service_url": "http://localhost:8000/rag/query_and_embedding",
+    "session_history_service_url": "http://localhost:8000/session/history",
+    "rag_top_k": 8,
+    "external_service_timeout": 2
+  },
+  "connection_pool": {
+    "connection_pool_size": 20,
+    "connection_timeout": 2,
+    "read_timeout": 3
   }
 }
