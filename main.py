@@ -119,7 +119,7 @@ class BuildResponse(BaseModel):
 
 
 # ======= API Endpoint: 提交并生成 LLM 请求体 =======
-@app.post("/api/build_request", response_model=BuildResponse)
+@app.post("/pe/build_request", response_model=BuildResponse)
 async def build_request(req: BuildRequest):
     session_id = req.session_id
     user_query = req.user_query
@@ -260,7 +260,7 @@ if __name__ == "__main__":
 
     # 使用配置文件中的设置启动服务
     uvicorn.run(
-        "pe_server:app",
+        "main:app",
         host="0.0.0.0", 
         port=config['port'], 
         workers=config.get('workers', 1),
