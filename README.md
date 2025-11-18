@@ -25,7 +25,7 @@ python main.py
 #### 请求结构
 ```json
 {
-    "session_id": "optional_session_id",  // 可选，会话ID用于历史记录
+    "session_id": "optional_session_id",  // 必填，会话ID用于历史记录
     "user_query": "用户输入的查询内容"      // 必填，用户当前查询
 }
 ```
