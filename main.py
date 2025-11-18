@@ -119,14 +119,6 @@ class BuildResponse(BaseModel):
 
 
 # ======= API Endpoint: 提交并生成 LLM 请求体 =======
-@app.on_event("startup")
-async def startup_event():
-    """服务启动时的预热事件"""
-    print("🚀 PE Server 正在启动...")
-    await warmup_services()
-    print("✅ PE Server 启动完成")
-
-
 @app.post("/api/build_request", response_model=BuildResponse)
 async def build_request(req: BuildRequest):
     session_id = req.session_id
@@ -138,7 +130,7 @@ async def build_request(req: BuildRequest):
         tasks = []
         
         # system prompt加载（线程池任务）
-        tasks.append(asyncio.to_thread(get_warmup_system_prompt, config['pe_system_prompt_path']))
+        tasks.append(asyncio.to_thread(load_system_prompt, config['pe_system_prompt_path']))
         
         # tools发现（条件启用）
         if config['pe_enable_tools']:
@@ -196,9 +188,6 @@ async def build_request(req: BuildRequest):
     messages: List[Dict[str, str]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
-    # 使用预热的system prompt（如果可用）
-    elif preloaded_system_prompt:
-        messages.append({"role": "system", "content": preloaded_system_prompt})
 
     rag_system_msg = rag_chunks_to_system_prompt(rag_results)
     if rag_system_msg:
