@@ -154,6 +154,175 @@ curl -X POST "http://127.0.0.1:25535/pe/build_request" \
 
 **响应**：返回Swagger UI文档页面
 
+### 3. WebSocket接口 - `/ws/build_prompt`
+
+**接口描述**：WebSocket长连接接口，用于实时处理build_prompt请求，支持双向通信和更低的延迟。
+
+#### 连接建立
+```javascript
+const ws = new WebSocket('ws://127.0.0.1:25535/ws/build_prompt');
+```
+
+#### 消息格式
+
+**请求消息**：
+```json
+{
+    "type": "build_prompt",
+    "request_id": "unique_request_id_123",
+    "data": {
+        "session_id": "optional_session_id",
+        "user_query": "用户查询内容",
+        "stream": false
+    }
+}
+```
+
+**响应消息**：
+```json
+{
+    "type": "build_prompt_response",
+    "request_id": "unique_request_id_123",
+    "status": "success",
+    "data": {
+        "llm_request": {
+            "messages": [...],
+            "tools": [...],
+            "max_tokens": 7000
+        },
+        "estimated_tokens": 156,
+        "trimmed_history_rounds": 0,
+        "processing_time_ms": 45.23
+    }
+}
+```
+
+**错误响应**：
+```json
+{
+    "type": "build_prompt_response",
+    "request_id": "unique_request_id_123",
+    "status": "error",
+    "error": "处理请求失败的具体原因"
+}
+```
+
+**心跳检测（Ping）**：
+```json
+{
+    "type": "ping",
+    "request_id": "ping_123"
+}
+```
+
+**心跳响应（Pong）**：
+```json
+{
+    "type": "pong",
+    "request_id": "ping_123",
+    "status": "success",
+    "data": {"timestamp": 1700000000.123}
+}
+```
+
+#### WebSocket使用示例
+
+**JavaScript客户端**：
+```javascript
+// 建立连接
+const ws = new WebSocket('ws://127.0.0.1:25535/ws/build_prompt');
+
+ws.onopen = function(event) {
+    console.log('WebSocket连接已建立');
+    
+    // 发送build_prompt请求
+    const request = {
+        type: "build_prompt",
+        request_id: "req_" + Date.now(),
+        data: {
+            session_id: "user_123",
+            user_query: "什么是机器学习？",
+            stream: false
+        }
+    };
+    
+    ws.send(JSON.stringify(request));
+};
+
+ws.onmessage = function(event) {
+    const response = JSON.parse(event.data);
+    console.log('收到响应:', response);
+    
+    if (response.type === 'build_prompt_response') {
+        if (response.status === 'success') {
+            console.log('LLM请求构建成功:', response.data);
+        } else {
+            console.error('请求处理失败:', response.error);
+        }
+    }
+};
+
+ws.onerror = function(error) {
+    console.error('WebSocket错误:', error);
+};
+
+ws.onclose = function(event) {
+    console.log('WebSocket连接已关闭');
+};
+```
+
+**Python客户端**：
+```python
+import asyncio
+import json
+import websockets
+
+async def test_websocket():
+    uri = "ws://127.0.0.1:25535/ws/build_prompt"
+    
+    async with websockets.connect(uri) as websocket:
+        # 发送请求
+        request = {
+            "type": "build_prompt",
+            "request_id": "req_001",
+            "data": {
+                "user_query": "帮我写一段Python代码",
+                "session_id": "test_session"
+            }
+        }
+        
+        await websocket.send(json.dumps(request))
+        
+        # 接收响应
+        response = await websocket.recv()
+        result = json.loads(response)
+        print("响应:", result)
+
+asyncio.run(test_websocket())
+```
+
+#### WebSocket优势
+- **低延迟**：长连接避免了HTTP连接建立的开销
+- **双向通信**：支持服务器主动向客户端推送消息
+- **实时性**：适合需要快速响应的交互式应用
+- **心跳检测**：内置ping/pong机制保持连接活跃
+- **请求追踪**：通过request_id匹配请求和响应
+
+#### WebSocket vs HTTP
+| 特性 | WebSocket | HTTP |
+|------|-----------|------|
+| 连接方式 | 长连接 | 短连接 |
+| 延迟 | 低 | 相对较高 |
+| 双向通信 | 支持 | 不支持 |
+| 适用场景 | 实时交互、频繁请求 | 偶尔请求、简单查询 |
+| 复杂度 | 较高 | 简单 |
+
+#### 注意事项
+1. WebSocket连接需要保持活跃，建议实现心跳机制
+2. 处理好连接断开和重连逻辑
+3. 对于大量并发连接，需要考虑连接池管理
+4. 生产环境建议使用wss://协议进行加密
+
 ## ⚙️ 配置说明
 
 ### 配置文件结构（config.json）

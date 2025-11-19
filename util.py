@@ -6,41 +6,36 @@ import asyncio
 
 import httpx
 import tiktoken
+from pydantic import BaseModel, Field
 
 from config_manager import ConfigManager
 
+class CacheManager:
+    def __init__(self):
+        self._cache = dict()
+        self._cache_lock = asyncio.Lock()
+
+    async def cache_prompt(self, session_id: str, system_prompt: str, tools_prompt: str):
+        async with self._cache_lock:
+            self._cache[session_id] = {
+                'system_prompt': system_prompt,
+                'tools_prompt': tools_prompt
+            }
+
+    async def update_cache(self, session_id: str, system_prompt: str, tools_prompt: str):
+        async with self._cache_lock:
+            if session_id in self._cache:
+                self._cache[session_id]['system_prompt'] = system_prompt
+                self._cache[session_id]['tools_prompt'] = tools_prompt
+
+    async def get_cached_prompt(self, session_id: str) -> Optional[Dict[str, str]]:
+        async with self._cache_lock:
+            return self._cache.get(session_id, None)
+
+
 # 获取配置和会话历史
 config = ConfigManager.get_config()
-
-
-# ======= 非侵入式耗时监控装饰器 =======
-def timeit(name: str):
-    """非侵入式耗时监控装饰器"""
-    def decorator(func):
-        if asyncio.iscoroutinefunction(func):
-            @wraps(func)
-            async def async_wrapper(*args, **kwargs):
-                start = time.time()
-                try:
-                    result = await func(*args, **kwargs)
-                    return result
-                finally:
-                    cost = time.time() - start
-                    print(f"[{name}] 耗时: {cost:.3f}s")
-            return async_wrapper
-        else:
-            @wraps(func)
-            def sync_wrapper(*args, **kwargs):
-                start = time.time()
-                try:
-                    result = func(*args, **kwargs)
-                    return result
-                finally:
-                    cost = time.time() - start
-                    print(f"[{name}] 耗时: {cost:.3f}s")
-            return sync_wrapper
-    return decorator
-
+cache_manager = CacheManager()
 
 # ======= 零入侵异步任务监控器 =======
 async def monitor_task(task, name: str):
@@ -73,11 +68,18 @@ except Exception:
 
 
 # ======= util: load system prompt =======
-def load_system_prompt(path: str) -> str:
+def load_system_prompt(path: str, session_id: str) -> str:
+    """加载系统提示词，支持缓存"""
+    cached_prompt = asyncio.run(cache_manager.get_cached_prompt(session_id))
+    if cached_prompt:
+        return cached_prompt['system_prompt']
+
     p = Path(path)
     if not p.exists():
         return ""  # 允许为空，但建议警告
-    return p.read_text(encoding="utf-8")
+    system_prompt = p.read_text(encoding="utf-8")
+    asyncio.run(cache_manager.cache_prompt(session_id, system_prompt, ""))
+    return system_prompt
 
 
 # ======= util: tool discovery =======
@@ -197,3 +199,42 @@ def compress_assistant_messages(messages: List[Dict[str, str]], target_chars: in
         else:
             out.append(m)
     return out
+
+
+
+# ======= 请求 / 响应 模型 ========
+class BuildRequest(BaseModel):
+    session_id: Optional[str] = Field(None, description="会话ID，用于从缓存中获取历史")
+    user_query: str = Field(..., description="用户当前 query")
+
+
+class BuildResponse(BaseModel):
+    llm_request: Dict[str, Any]
+    estimated_tokens: int
+    trimmed_history_rounds: int
+
+
+# ======= WebSocket 消息模型 ========
+class WebSocketBuildPromptRequest(BaseModel):
+    """WebSocket build_prompt 请求"""
+    session_id: Optional[str] = Field(None, description="会话ID")
+    user_query: str = Field(..., description="用户查询")
+    request_id: str = Field(..., description="请求ID，用于匹配响应")
+    stream: bool = Field(False, description="是否流式响应")
+
+
+class WebSocketBuildPromptResponse(BaseModel):
+    """WebSocket build_prompt 响应"""
+    request_id: str = Field(..., description="对应的请求ID")
+    llm_request: Dict[str, Any] = Field(..., description="LLM请求体")
+    estimated_tokens: int = Field(..., description="估算的token数量")
+    trimmed_history_rounds: int = Field(..., description="裁剪的历史轮数")
+    processing_time_ms: float = Field(..., description="处理时间（毫秒）")
+
+
+class WebSocketErrorResponse(BaseModel):
+    """WebSocket错误响应"""
+    request_id: Optional[str] = Field(None, description="对应的请求ID")
+    error_type: str = Field(..., description="错误类型")
+    error_message: str = Field(..., description="错误消息")
+    timestamp: float = Field(default_factory=time.time, description="错误时间戳")

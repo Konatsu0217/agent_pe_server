@@ -5,12 +5,13 @@ import os
 import json
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 import httpx
 
 from util import load_system_prompt, discover_tools, call_rag, rag_chunks_to_system_prompt, get_history_for_session, \
-    estimate_tokens_from_messages, compress_assistant_messages, monitor_task, monitor_thread_task, fetch_session_history
+    estimate_tokens_from_messages, compress_assistant_messages, monitor_task, monitor_thread_task, \
+    fetch_session_history, BuildRequest, BuildResponse
 from config_manager import ConfigManager
 
 
@@ -106,21 +107,15 @@ httpx_client = httpx.AsyncClient(
     )
 )
 
-# ======= 请求 / 响应 模型 ========
-class BuildRequest(BaseModel):
-    session_id: Optional[str] = Field(None, description="会话ID，用于从缓存中获取历史")
-    user_query: str = Field(..., description="用户当前 query")
-
-
-class BuildResponse(BaseModel):
-    llm_request: Dict[str, Any]
-    estimated_tokens: int
-    trimmed_history_rounds: int
-
-
 # ======= API Endpoint: 提交并生成 LLM 请求体 =======
 @app.post("/pe/build_request", response_model=BuildResponse)
 async def build_request(req: BuildRequest):
+    """HTTP接口：构建LLM请求"""
+    return await build_request_handler(req)
+
+
+async def build_request_handler(req: BuildRequest) -> BuildResponse:
+    """提取出来的build_request处理逻辑，供WebSocket和HTTP共用"""
     session_id = req.session_id
     user_query = req.user_query
     start_time = time.time()
@@ -130,7 +125,7 @@ async def build_request(req: BuildRequest):
         tasks = []
         
         # system prompt加载（线程池任务）
-        tasks.append(asyncio.to_thread(load_system_prompt, config['pe_system_prompt_path']))
+        tasks.append(asyncio.to_thread(load_system_prompt, config['pe_system_prompt_path'], session_id))
         tasks.append(discover_tools(httpx_client))
         tasks.append(call_rag(httpx_client, user_query, config['pe_rag_top_k']))
         tasks.append(fetch_session_history(httpx_client, session_id))
@@ -239,6 +234,140 @@ class AppendMessageReq(BaseModel):
     session_id: str
     role: str
     content: str
+
+
+# ======= WebSocket 端点 =======
+@app.websocket("/ws/build_prompt")
+async def websocket_build_prompt(websocket: WebSocket):
+    """
+    WebSocket端点：实时处理build_prompt请求
+    
+    消息格式：
+    {
+        "type": "build_prompt",
+        "request_id": "unique_request_id",
+        "data": {
+            "session_id": "unique_session_id",
+            "user_query": "用户查询内容",
+            "stream": false
+        }
+    }
+    
+    响应格式：
+    {
+        "type": "build_prompt_response",
+        "request_id": "unique_request_id",
+        "status": "success|error",
+        "data": { ... },
+        "error": "错误信息（如果有）"
+    }
+    """
+    await websocket.accept()
+    print(f"WebSocket连接已建立: {websocket.client}")
+    
+    try:
+        while True:
+            # 接收消息
+            message_text = await websocket.receive_text()
+            print(f"收到WebSocket消息: {message_text}")
+            
+            try:
+                message = json.loads(message_text)
+                message_type = message.get("type")
+                request_id = message.get("request_id", f"req_{int(time.time() * 1000)}")
+                
+                if message_type == "build_prompt":
+                    # 处理build_prompt请求
+                    await _handle_build_prompt_websocket(websocket, message.get("data", {}), request_id)
+                
+                elif message_type == "ping":
+                    # 处理ping请求
+                    pong_response = {
+                        "type": "pong",
+                        "request_id": request_id,
+                        "status": "success",
+                        "data": {"timestamp": time.time()}
+                    }
+                    await websocket.send_text(json.dumps(pong_response))
+                
+                else:
+                    # 未知消息类型
+                    error_response = {
+                        "type": "error",
+                        "request_id": request_id,
+                        "status": "error",
+                        "error": f"不支持的消息类型: {message_type}"
+                    }
+                    await websocket.send_text(json.dumps(error_response))
+            
+            except json.JSONDecodeError as e:
+                error_response = {
+                    "type": "error",
+                    "status": "error",
+                    "error": f"JSON解析错误: {e}"
+                }
+                await websocket.send_text(json.dumps(error_response))
+            
+            except Exception as e:
+                error_response = {
+                    "type": "error",
+                    "status": "error",
+                    "error": f"处理消息时出错: {e}"
+                }
+                await websocket.send_text(json.dumps(error_response))
+    
+    except WebSocketDisconnect:
+        print(f"WebSocket客户端断开连接: {websocket.client}")
+    except Exception as e:
+        print(f"WebSocket连接异常: {e}")
+
+
+async def _handle_build_prompt_websocket(websocket: WebSocket, data: dict, request_id: str):
+    """处理WebSocket的build_prompt请求"""
+    start_time = time.time()
+    
+    try:
+        # 提取参数
+        session_id = data.get("session_id")
+        user_query = data.get("user_query", "")
+        stream = data.get("stream", False)
+        
+        if not user_query:
+            raise ValueError("user_query不能为空")
+        
+        print(f"WebSocket处理build_prompt请求 - 会话: {session_id}, 查询: {user_query}")
+        
+        # 复用现有的build_request逻辑
+        build_request = BuildRequest(session_id=session_id, user_query=user_query)
+        result = await build_request_handler(build_request)
+        
+        # 构建WebSocket响应
+        processing_time_ms = (time.time() - start_time) * 1000
+        
+        response = {
+            "type": "build_prompt_response",
+            "request_id": request_id,
+            "status": "success",
+            "data": {
+                "llm_request": result.llm_request,
+                "estimated_tokens": result.estimated_tokens,
+                "trimmed_history_rounds": result.trimmed_history_rounds,
+                "processing_time_ms": processing_time_ms
+            }
+        }
+        
+        await websocket.send_text(json.dumps(response))
+        print(f"WebSocket响应发送成功 - 请求ID: {request_id}, 处理时间: {processing_time_ms:.2f}ms")
+    
+    except Exception as e:
+        error_response = {
+            "type": "build_prompt_response",
+            "request_id": request_id,
+            "status": "error",
+            "error": f"处理build_prompt请求失败: {e}"
+        }
+        await websocket.send_text(json.dumps(error_response))
+        print(f"WebSocket处理失败 - 请求ID: {request_id}, 错误: {e}")
 
 
 # ======= 启动（用于直接运行） =======

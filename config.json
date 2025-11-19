@@ -21,7 +21,7 @@
   },
   "pe_settings": {
     "api_url": "/api/build_prompt",
-    "enable_history": true,
+    "enable_history": false,
     "history_max_rounds": 6,
     "enable_tools": true,
     "enable_rag": true,
