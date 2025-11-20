@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Coroutine
 from pathlib import Path
 import time
 from functools import wraps
@@ -99,7 +99,7 @@ async def discover_tools(client: httpx.AsyncClient) -> List[Dict[str, Any]]:
 
 
 # ======= util: call rag =======
-async def call_rag(client: httpx.AsyncClient, query: str, top_k: int) -> List[Dict[str, Any]]:
+async def call_rag(client: httpx.AsyncClient, query: str, top_k: int) -> list[Any] | dict[str, str] | None:
     if not config['pe_enable_rag']:
         return []
     payload = {"query": query, "top_k": top_k}
@@ -107,14 +107,15 @@ async def call_rag(client: httpx.AsyncClient, query: str, top_k: int) -> List[Di
         resp = await client.post(config['pe_rag_service_url'], json=payload, timeout=15.0)
         resp.raise_for_status()
         data = resp.json()
-        return data.get("results", []) if isinstance(data, dict) else []
+        result = data.get("results", []) if isinstance(data, dict) else []
+        return rag_chunks_to_system_prompt(result)
     except Exception as e:
         print(f"rag call failed: {e}")
         return []
 
 
 # ======= util: 获取会话历史记录 =======
-async def fetch_session_history(client: httpx.AsyncClient, session_id: Optional[str]) -> List[Dict[str, str]]:
+async def fetch_session_history(client: httpx.AsyncClient, session_id: Optional[str], trimmed_history_rounds: int) -> List[Dict[str, str]]:
     """从外部服务获取会话历史记录"""
     if not session_id or not config.get('pe_session_history_service_url') or not config['pe_enable_history']:
         return []
@@ -128,7 +129,7 @@ async def fetch_session_history(client: httpx.AsyncClient, session_id: Optional[
         # 期待返回格式: {"messages": [{"role": "user", "content": "..."}, ...]}
         messages = data.get("messages", [])
         if isinstance(messages, list):
-            return messages
+            return messages[-trimmed_history_rounds*2:]  # 每条对话包含user和assistant两条消息
         return []
     except Exception as e:
         print(f"fetch session history failed: {e}")
@@ -211,7 +212,6 @@ class BuildRequest(BaseModel):
 class BuildResponse(BaseModel):
     llm_request: Dict[str, Any]
     estimated_tokens: int
-    trimmed_history_rounds: int
 
 
 # ======= WebSocket 消息模型 ========
