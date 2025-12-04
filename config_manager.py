@@ -54,7 +54,7 @@ class ConfigManager:
                 'pe_enable_tools': True,
                 'pe_enable_rag': True,
                 'pe_max_token_budget': 7000,
-                'pe_system_prompt_path': "systemPrompt.json",
+                'pe_system_prompt_path': "systemPrompt.txt",
                 'pe_api_url': "/api/build_prompt",
                 'pe_tool_service_url': "http://localhost:8000/tool/get_tool_list",
                 'pe_rag_service_url': "http://localhost:8000/rag/query_and_embedding",

@@ -75,7 +75,7 @@ class ConfigLoader:
                 'pe_enable_tools': True,
                 'pe_enable_rag': True,
                 'pe_max_token_budget': 7000,
-                'pe_system_prompt_path': "systemPrompt.json",
+                'pe_system_prompt_path': "systemPrompt.txt",
                 'pe_api_url': "/api/build_prompt",
                 'pe_tool_service_url': "http://localhost:8000/tool/get_tool_list",
                 'pe_rag_service_url': "http://localhost:8000/rag/query_and_embedding",
@@ -128,13 +128,12 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
 
         # system prompt加载（线程池任务）
         tasks.append(asyncio.to_thread(load_system_prompt, config['pe_system_prompt_path'], session_id))
-        tasks.append(discover_tools(httpx_client))
         tasks.append(call_rag(httpx_client, user_query, config['pe_rag_top_k']))
         tasks.append(fetch_session_history(httpx_client, session_id, config['pe_history_max_rounds']))
 
         # 设置超时控制
         timeout_seconds = config.get('pe_external_service_timeout', 2)
-        system_prompt, tools_list, rag_results, external_history = await asyncio.wait_for(
+        system_prompt, rag_results, external_history = await asyncio.wait_for(
             asyncio.gather(*tasks, return_exceptions=True),
             timeout=timeout_seconds
         )
@@ -143,9 +142,6 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
         if isinstance(system_prompt, Exception):
             print(f"System prompt loading failed: {system_prompt}")
             system_prompt = None
-        if isinstance(tools_list, Exception):
-            print(f"Tools discovery failed: {tools_list}")
-            tools_list = []
         if isinstance(rag_results, Exception):
             print(f"RAG call failed: {rag_results}")
             rag_results = []
@@ -156,13 +152,11 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
     except asyncio.TimeoutError:
         print(f"External services timeout after {timeout_seconds}s")
         system_prompt = None
-        tools_list = []
         rag_results = []
         external_history = None
     except Exception as e:
         print(f"Error in external service calls: {e}")
         system_prompt = None
-        tools_list = []
         rag_results = []
         external_history = None
 
@@ -188,7 +182,6 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
     llm_request = {
         # 模型在 Agent-Core中配置
         "messages": messages,
-        "tools": tools_list if config['pe_enable_tools'] else [],
     }
 
     processing_time = (time.time() - start_time) * 1000
@@ -324,7 +317,6 @@ async def _handle_build_prompt_websocket(websocket: WebSocket, data: dict, reque
             "data": {
                 "llm_request": result.llm_request,
                 "estimated_tokens": result.estimated_tokens,
-                "trimmed_history_rounds": result.trimmed_history_rounds,
                 "processing_time_ms": processing_time_ms
             }
         }

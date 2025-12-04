@@ -344,7 +344,7 @@ asyncio.run(test_websocket())
         "enable_tools": true,             // 是否启用工具调用
         "enable_rag": true,               // 是否启用RAG检索
         "max_token_budget": 7000,         // token预算上限
-        "system_prompt_path": "systemPrompt.json",  // 系统提示词文件路径
+        "system_prompt_path": "systemPrompt.txt",  // 系统提示词文件路径
         "tool_service_url": "http://localhost:8000/tool/get_tool_list",     // 工具服务地址
         "rag_service_url": "http://localhost:8000/rag/query_and_embedding", // RAG服务地址
         "session_history_service_url": "http://localhost:8000/session/history", // 会话历史服务地址
