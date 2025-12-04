@@ -1,4 +1,5 @@
-from typing import List, Dict, Any, Optional
+import json
+from typing import List, Dict, Any, Optional, Coroutine
 from pathlib import Path
 import time
 from functools import wraps
@@ -6,41 +7,36 @@ import asyncio
 
 import httpx
 import tiktoken
+from pydantic import BaseModel, Field
 
 from config_manager import ConfigManager
 
+class CacheManager:
+    def __init__(self):
+        self._cache = dict()
+        self._cache_lock = asyncio.Lock()
+
+    async def cache_prompt(self, session_id: str, system_prompt: str, tools_prompt: str):
+        async with self._cache_lock:
+            self._cache[session_id] = {
+                'system_prompt': system_prompt,
+                'tools_prompt': tools_prompt
+            }
+
+    async def update_cache(self, session_id: str, system_prompt: str, tools_prompt: str):
+        async with self._cache_lock:
+            if session_id in self._cache:
+                self._cache[session_id]['system_prompt'] = system_prompt
+                self._cache[session_id]['tools_prompt'] = tools_prompt
+
+    async def get_cached_prompt(self, session_id: str) -> Optional[Dict[str, str]]:
+        async with self._cache_lock:
+            return self._cache.get(session_id, None)
+
+
 # 获取配置和会话历史
 config = ConfigManager.get_config()
-
-
-# ======= 非侵入式耗时监控装饰器 =======
-def timeit(name: str):
-    """非侵入式耗时监控装饰器"""
-    def decorator(func):
-        if asyncio.iscoroutinefunction(func):
-            @wraps(func)
-            async def async_wrapper(*args, **kwargs):
-                start = time.time()
-                try:
-                    result = await func(*args, **kwargs)
-                    return result
-                finally:
-                    cost = time.time() - start
-                    print(f"[{name}] 耗时: {cost:.3f}s")
-            return async_wrapper
-        else:
-            @wraps(func)
-            def sync_wrapper(*args, **kwargs):
-                start = time.time()
-                try:
-                    result = func(*args, **kwargs)
-                    return result
-                finally:
-                    cost = time.time() - start
-                    print(f"[{name}] 耗时: {cost:.3f}s")
-            return sync_wrapper
-    return decorator
-
+cache_manager = CacheManager()
 
 # ======= 零入侵异步任务监控器 =======
 async def monitor_task(task, name: str):
@@ -73,11 +69,18 @@ except Exception:
 
 
 # ======= util: load system prompt =======
-def load_system_prompt(path: str) -> str:
+def load_system_prompt(path: str, session_id: str) -> str:
+    """加载系统提示词，支持缓存"""
+    cached_prompt = asyncio.run(cache_manager.get_cached_prompt(session_id))
+    if cached_prompt:
+        return cached_prompt['system_prompt']
+
     p = Path(path)
     if not p.exists():
         return ""  # 允许为空，但建议警告
-    return p.read_text(encoding="utf-8")
+    system_prompt = p.read_text(encoding="utf-8")
+    asyncio.run(cache_manager.cache_prompt(session_id, system_prompt, ""))
+    return system_prompt
 
 
 # ======= util: tool discovery =======
@@ -97,7 +100,7 @@ async def discover_tools(client: httpx.AsyncClient) -> List[Dict[str, Any]]:
 
 
 # ======= util: call rag =======
-async def call_rag(client: httpx.AsyncClient, query: str, top_k: int) -> List[Dict[str, Any]]:
+async def call_rag(client: httpx.AsyncClient, query: str, top_k: int) -> list[Any] | dict[str, str] | None:
     if not config['pe_enable_rag']:
         return []
     payload = {"query": query, "top_k": top_k}
@@ -105,14 +108,15 @@ async def call_rag(client: httpx.AsyncClient, query: str, top_k: int) -> List[Di
         resp = await client.post(config['pe_rag_service_url'], json=payload, timeout=15.0)
         resp.raise_for_status()
         data = resp.json()
-        return data.get("results", []) if isinstance(data, dict) else []
+        result = data.get("results", []) if isinstance(data, dict) else []
+        return rag_chunks_to_system_prompt(result)
     except Exception as e:
         print(f"rag call failed: {e}")
         return []
 
 
 # ======= util: 获取会话历史记录 =======
-async def fetch_session_history(client: httpx.AsyncClient, session_id: Optional[str]) -> List[Dict[str, str]]:
+async def fetch_session_history(client: httpx.AsyncClient, session_id: Optional[str], trimmed_history_rounds: int) -> List[Dict[str, str]]:
     """从外部服务获取会话历史记录"""
     if not session_id or not config.get('pe_session_history_service_url') or not config['pe_enable_history']:
         return []
@@ -126,7 +130,7 @@ async def fetch_session_history(client: httpx.AsyncClient, session_id: Optional[
         # 期待返回格式: {"messages": [{"role": "user", "content": "..."}, ...]}
         messages = data.get("messages", [])
         if isinstance(messages, list):
-            return messages
+            return messages[-trimmed_history_rounds*2:]  # 每条对话包含user和assistant两条消息
         return []
     except Exception as e:
         print(f"fetch session history failed: {e}")
@@ -197,3 +201,41 @@ def compress_assistant_messages(messages: List[Dict[str, str]], target_chars: in
         else:
             out.append(m)
     return out
+
+
+
+# ======= 请求 / 响应 模型 ========
+class BuildRequest(BaseModel):
+    session_id: Optional[str] = Field(None, description="会话ID，用于从缓存中获取历史")
+    user_query: str = Field(..., description="用户当前 query")
+
+
+class BuildResponse(BaseModel):
+    llm_request: Dict[str, Any]
+    estimated_tokens: int
+
+
+# ======= WebSocket 消息模型 ========
+class WebSocketBuildPromptRequest(BaseModel):
+    """WebSocket build_prompt 请求"""
+    session_id: Optional[str] = Field(None, description="会话ID")
+    user_query: str = Field(..., description="用户查询")
+    request_id: str = Field(..., description="请求ID，用于匹配响应")
+    stream: bool = Field(False, description="是否流式响应")
+
+
+class WebSocketBuildPromptResponse(BaseModel):
+    """WebSocket build_prompt 响应"""
+    request_id: str = Field(..., description="对应的请求ID")
+    llm_request: Dict[str, Any] = Field(..., description="LLM请求体")
+    estimated_tokens: int = Field(..., description="估算的token数量")
+    trimmed_history_rounds: int = Field(..., description="裁剪的历史轮数")
+    processing_time_ms: float = Field(..., description="处理时间（毫秒）")
+
+
+class WebSocketErrorResponse(BaseModel):
+    """WebSocket错误响应"""
+    request_id: Optional[str] = Field(None, description="对应的请求ID")
+    error_type: str = Field(..., description="错误类型")
+    error_message: str = Field(..., description="错误消息")
+    timestamp: float = Field(default_factory=time.time, description="错误时间戳")
