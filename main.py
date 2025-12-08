@@ -120,6 +120,7 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
     """提取出来的build_request处理逻辑，供WebSocket和HTTP共用"""
     session_id = req.session_id
     user_query = req.user_query
+    system_resources = req.system_resources
     start_time = time.time()
 
     try:
@@ -163,7 +164,10 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
     # messages 顺序：system, rag(system), history..., user
     messages: List[Dict[str, str]] = []
     if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
+        mes = {"role": "system", "content": system_prompt}
+        if system_resources is not "":
+            mes["content"] += f"\n {system_resources}"
+        messages.append(mes)
 
     if rag_results:
         messages.append(rag_results)
@@ -214,6 +218,7 @@ async def websocket_build_prompt(websocket: WebSocket):
         "request_id": "unique_request_id",
         "data": {
             "session_id": "unique_session_id",
+            "system_resources": "系统中的可变资源",
             "user_query": "用户查询内容",
             "stream": false
         }
@@ -296,6 +301,7 @@ async def _handle_build_prompt_websocket(websocket: WebSocket, data: dict, reque
         # 提取参数
         session_id = data.get("session_id")
         user_query = data.get("user_query", "")
+        system_resources = data.get("system_resources", "")
         stream = data.get("stream", False)
 
         if not user_query:
@@ -304,7 +310,7 @@ async def _handle_build_prompt_websocket(websocket: WebSocket, data: dict, reque
         print(f"WebSocket处理build_prompt请求 - 会话: {session_id}, 查询: {user_query}")
 
         # 复用现有的build_request逻辑
-        build_request = BuildRequest(session_id=session_id, user_query=user_query)
+        build_request = BuildRequest(session_id=session_id, user_query=user_query, system_resources=system_resources)
         result = await build_request_handler(build_request)
 
         # 构建WebSocket响应

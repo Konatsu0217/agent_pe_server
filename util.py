@@ -208,6 +208,7 @@ def compress_assistant_messages(messages: List[Dict[str, str]], target_chars: in
 class BuildRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="会话ID，用于从缓存中获取历史")
     user_query: str = Field(..., description="用户当前 query")
+    system_resources: Optional[str] = Field(None, description="系统中的可变资源")
 
 
 class BuildResponse(BaseModel):
