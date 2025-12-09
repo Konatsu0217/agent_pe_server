@@ -11,7 +11,7 @@ class ConfigManager:
     _config: Dict[str, Any] = None
 
     @classmethod
-    def load_config(cls, config_path='config.json'):
+    def load_config(cls, config_path='pe_config.json'):
         """加载配置文件"""
         try:
             with open(config_path, 'r', encoding='utf-8') as f:

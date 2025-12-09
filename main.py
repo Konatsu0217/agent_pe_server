@@ -1,93 +1,15 @@
-import time
-from typing import List, Optional, Dict, Any
 import asyncio
-import os
 import json
-from pathlib import Path
+import time
+from typing import List, Dict
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
 import httpx
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
-from util import load_system_prompt, discover_tools, call_rag, rag_chunks_to_system_prompt, get_history_for_session, \
-    estimate_tokens_from_messages, compress_assistant_messages, monitor_task, monitor_thread_task, \
-    fetch_session_history, BuildRequest, BuildResponse
 from config_manager import ConfigManager
-
-
-# 配置加载器（从server.py复制过来）
-class ConfigLoader:
-    _instance = None
-    _config = None
-
-    @classmethod
-    def get_config(cls, config_path='config.json'):
-        if cls._config is None:
-            cls._load_config(config_path)
-        return cls._config
-
-    @classmethod
-    def _load_config(cls, config_path):
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-
-            # 扁平化配置，便于访问
-            cls._config = {
-                # 服务器配置
-                'port': config_data['server']['port'],
-                'workers': config_data['server']['workers'],
-                'limit_concurrency': config_data['server']['limit_concurrency'],
-                'backlog': config_data['server']['backlog'],
-                'reload': config_data['server']['reload'],
-                'timeout_keep_alive': config_data['server'].get('timeout_keep_alive', 5),
-                # PE Settings
-                'pe_enable_history': config_data['pe_settings']['enable_history'],
-                'pe_history_max_rounds': config_data['pe_settings']['history_max_rounds'],
-                'pe_enable_tools': config_data['pe_settings']['enable_tools'],
-                'pe_enable_rag': config_data['pe_settings']['enable_rag'],
-                'pe_max_token_budget': config_data['pe_settings']['max_token_budget'],
-                'pe_system_prompt_path': config_data['pe_settings']['system_prompt_path'],
-                'pe_tool_service_url': config_data['pe_settings']['tool_service_url'],
-                'pe_rag_service_url': config_data['pe_settings']['rag_service_url'],
-                'pe_rag_top_k': config_data['pe_settings']['rag_top_k'],
-                'pe_api_url': config_data['pe_settings']['api_url'],
-                'pe_external_service_timeout': config_data['pe_settings'].get('external_service_timeout', 2),
-                # 连接池配置
-                'connection_pool_size': config_data.get('connection_pool', {}).get('connection_pool_size', 20),
-                'connection_timeout': config_data.get('connection_pool', {}).get('connection_timeout', 2),
-                'read_timeout': config_data.get('connection_pool', {}).get('read_timeout', 3),
-            }
-            print(f"配置加载成功: {cls._config}")
-        except Exception as e:
-            print(f"配置文件加载失败: {str(e)}")
-            # 使用默认配置作为后备
-            cls._config = {
-                'port': 18080,
-                'workers': 1,
-                'limit_concurrency': 100,
-                'backlog': 512,
-                'reload': True,
-                'timeout_keep_alive': 5,
-                # PE Settings 默认值
-                'pe_enable_history': True,
-                'pe_history_max_rounds': 6,
-                'pe_enable_tools': True,
-                'pe_enable_rag': True,
-                'pe_max_token_budget': 7000,
-                'pe_system_prompt_path': "systemPrompt.txt",
-                'pe_api_url': "/api/build_prompt",
-                'pe_tool_service_url': "http://localhost:8000/tool/get_tool_list",
-                'pe_rag_service_url': "http://localhost:8000/rag/query_and_embedding",
-                'pe_rag_top_k': 3,
-                'pe_external_service_timeout': 2,
-                # 连接池配置
-                'connection_pool_size': 20,
-                'connection_timeout': 2,
-                'read_timeout': 3,
-            }
-            print(f"使用默认配置: {cls._config}")
-
+from util import load_system_prompt, call_rag, estimate_tokens_from_messages, fetch_session_history, BuildRequest, \
+    BuildResponse
 
 app = FastAPI(title="Prompt Engine (PE) - FastAPI")
 # 获取配置
@@ -165,7 +87,7 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
     messages: List[Dict[str, str]] = []
     if system_prompt:
         mes = {"role": "system", "content": system_prompt}
-        if system_resources is not "":
+        if system_resources != "":
             mes["content"] += f"\n {system_resources}"
         messages.append(mes)
 
@@ -354,5 +276,6 @@ if __name__ == "__main__":
         limit_concurrency=config.get('limit_concurrency', 100),
         backlog=config.get('backlog', 512),
         reload=config.get('reload', True),
+        log_level="error",
         timeout_keep_alive=config.get('timeout_keep_alive', 5),
     )
