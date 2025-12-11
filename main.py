@@ -65,9 +65,9 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
         if isinstance(system_prompt, Exception):
             print(f"System prompt loading failed: {system_prompt}")
             system_prompt = None
-        if isinstance(rag_results, Exception):
-            print(f"RAG call failed: {rag_results}")
-            rag_results = []
+        # if isinstance(rag_results, Exception):
+        #     print(f"RAG call failed: {rag_results}")
+        #     rag_results = []
         if isinstance(external_history, Exception):
             print(f"Session history fetch failed: {external_history}")
             external_history = None
