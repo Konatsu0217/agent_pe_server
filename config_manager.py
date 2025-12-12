@@ -11,11 +11,31 @@ class ConfigManager:
     _config: Dict[str, Any] = None
 
     @classmethod
-    def load_config(cls, config_path='pe_config.json'):
+    def load_config(cls, config_path=None):
         """加载配置文件"""
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
+            # 兼容多路径：优先项目根目录 config/pe.json，其次相对路径，再次本地pe_config.json
+            from pathlib import Path
+            candidates = []
+            if config_path:
+                candidates.append(Path(config_path))
+            candidates.extend([
+                Path('config/pe.json'),
+                Path(__file__).resolve().parents[2] / 'config' / 'pe.json',
+                Path('pe_config.json')
+            ])
+
+            config_data = None
+            for p in candidates:
+                try:
+                    if p.exists():
+                        with open(p, 'r', encoding='utf-8') as f:
+                            config_data = json.load(f)
+                            break
+                except Exception:
+                    continue
+            if config_data is None:
+                raise FileNotFoundError('pe配置文件未找到')
 
             # 扁平化配置，便于访问
             cls._config = {
