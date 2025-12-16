@@ -51,12 +51,12 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
 
         # system prompt加载（线程池任务）
         tasks.append(asyncio.to_thread(load_system_prompt, config['pe_system_prompt_path'], session_id))
-        tasks.append(call_rag(httpx_client, user_query, config['pe_rag_top_k']))
+        # tasks.append(call_rag(httpx_client, user_query, config['pe_rag_top_k']))
         tasks.append(fetch_session_history(httpx_client, session_id, config['pe_history_max_rounds']))
 
         # 设置超时控制
-        timeout_seconds = config.get('pe_external_service_timeout', 2)
-        system_prompt, rag_results, external_history = await asyncio.wait_for(
+        timeout_seconds = config.get('pe_external_service_timeout', 100000000)
+        system_prompt, external_history = await asyncio.wait_for(
             asyncio.gather(*tasks, return_exceptions=True),
             timeout=timeout_seconds
         )
@@ -91,8 +91,8 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
             mes["content"] += f"\n {system_resources}"
         messages.append(mes)
 
-    if rag_results:
-        messages.append(rag_results)
+    # if rag_results:
+    #     messages.append(rag_results)
 
     # 当前query
     if user_query:
