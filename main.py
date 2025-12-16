@@ -8,7 +8,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from config_manager import ConfigManager
-from util import load_system_prompt, call_rag, estimate_tokens_from_messages, fetch_session_history, BuildRequest, \
+from util import load_system_prompt, estimate_tokens_from_messages, fetch_session_history, BuildRequest, \
     BuildResponse
 
 app = FastAPI(title="Prompt Engine (PE) - FastAPI")
@@ -46,12 +46,11 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
     start_time = time.time()
 
     try:
-        # 并行获取 system prompt、tools、rag（使用连接池和超时控制）
+        # 并行获取 system prompt、历史（使用连接池和超时控制）
         tasks = []
 
         # system prompt加载（线程池任务）
         tasks.append(asyncio.to_thread(load_system_prompt, config['pe_system_prompt_path'], session_id))
-        # tasks.append(call_rag(httpx_client, user_query, config['pe_rag_top_k']))
         tasks.append(fetch_session_history(httpx_client, session_id, config['pe_history_max_rounds']))
 
         # 设置超时控制
@@ -65,9 +64,6 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
         if isinstance(system_prompt, Exception):
             print(f"System prompt loading failed: {system_prompt}")
             system_prompt = None
-        # if isinstance(rag_results, Exception):
-        #     print(f"RAG call failed: {rag_results}")
-        #     rag_results = []
         if isinstance(external_history, Exception):
             print(f"Session history fetch failed: {external_history}")
             external_history = None
@@ -75,15 +71,13 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
     except asyncio.TimeoutError:
         print(f"External services timeout after {timeout_seconds}s")
         system_prompt = None
-        rag_results = []
         external_history = None
     except Exception as e:
         print(f"Error in external service calls: {e}")
         system_prompt = None
-        rag_results = []
         external_history = None
 
-    # messages 顺序：system, rag(system), history..., user
+    # messages 顺序：system, history..., user
     messages: List[Dict[str, str]] = []
     if system_prompt:
         mes = {"role": "system", "content": system_prompt}
@@ -91,8 +85,6 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
             mes["content"] += f"\n {system_resources}"
         messages.append(mes)
 
-    # if rag_results:
-    #     messages.append(rag_results)
 
     # 当前query
     if user_query:

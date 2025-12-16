@@ -99,20 +99,6 @@ async def discover_tools(client: httpx.AsyncClient) -> List[Dict[str, Any]]:
         return []
 
 
-# ======= util: call rag =======
-async def call_rag(client: httpx.AsyncClient, query: str, top_k: int) -> list[Any] | dict[str, str] | None:
-    if not config['pe_enable_rag']:
-        return []
-    payload = {"query": query, "top_k": top_k}
-    try:
-        resp = await client.post(config['pe_rag_service_url'], json=payload, timeout=15.0)
-        resp.raise_for_status()
-        data = resp.json()
-        result = data.get("results", []) if isinstance(data, dict) else []
-        return rag_chunks_to_system_prompt(result)
-    except Exception as e:
-        print(f"rag call failed: {e}")
-        return []
 
 
 # ======= util: 获取会话历史记录 =======
@@ -153,20 +139,6 @@ def estimate_tokens_from_messages(messages: List[Dict[str, str]]) -> int:
         return max(1, len(full_text) // 4)
 
 
-# ======= util: build rag system prompt from chunks =======
-def rag_chunks_to_system_prompt(chunks: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
-    if not chunks:
-        return None
-    lines = ["RAG Retrieved Knowledge Chunks:"]
-    for i, c in enumerate(chunks, start=1):
-        chunk_text = c.get("chunk") or c.get("text") or ""
-        source = c.get("source") or c.get("id") or "unknown"
-        score = c.get("score")
-        if score is not None:
-            lines.append(f"{i}. (score={score}) source={source} -- {chunk_text}")
-        else:
-            lines.append(f"{i}. source={source} -- {chunk_text}")
-    return {"role": "system", "content": "\n".join(lines)}
 
 
 # ======= util: trim history to rounds =======
