@@ -11,11 +11,31 @@ class ConfigManager:
     _config: Dict[str, Any] = None
 
     @classmethod
-    def load_config(cls, config_path='config.json'):
+    def load_config(cls, config_path=None):
         """加载配置文件"""
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
+            # 兼容多路径：优先项目根目录 config/pe.json，其次相对路径，再次本地pe_config.json
+            from pathlib import Path
+            candidates = []
+            if config_path:
+                candidates.append(Path(config_path))
+            candidates.extend([
+                Path('config/pe.json'),
+                Path(__file__).resolve().parents[2] / 'config' / 'pe.json',
+                Path('pe_config.json')
+            ])
+
+            config_data = None
+            for p in candidates:
+                try:
+                    if p.exists():
+                        with open(p, 'r', encoding='utf-8') as f:
+                            config_data = json.load(f)
+                            break
+                except Exception:
+                    continue
+            if config_data is None:
+                raise FileNotFoundError('pe配置文件未找到')
 
             # 扁平化配置，便于访问
             cls._config = {
@@ -29,12 +49,9 @@ class ConfigManager:
                 'pe_enable_history': config_data['pe_settings']['enable_history'],
                 'pe_history_max_rounds': config_data['pe_settings']['history_max_rounds'],
                 'pe_enable_tools': config_data['pe_settings']['enable_tools'],
-                'pe_enable_rag': config_data['pe_settings']['enable_rag'],
                 'pe_max_token_budget': config_data['pe_settings']['max_token_budget'],
-                'pe_system_prompt_path': config_data['pe_settings']['system_prompt_path'],
+                'pe_system_prompt_path': "system_prompt.j2",
                 'pe_tool_service_url': config_data['pe_settings']['tool_service_url'],
-                'pe_rag_service_url': config_data['pe_settings']['rag_service_url'],
-                'pe_rag_top_k': config_data['pe_settings']['rag_top_k'],
                 'pe_api_url': config_data['pe_settings']['api_url'],
                 'pe_session_history_service_url': config_data['pe_settings'].get('session_history_service_url', ''),
             }
@@ -52,13 +69,10 @@ class ConfigManager:
                 'pe_enable_history': True,
                 'pe_history_max_rounds': 6,
                 'pe_enable_tools': True,
-                'pe_enable_rag': True,
                 'pe_max_token_budget': 7000,
-                'pe_system_prompt_path': "systemPrompt.txt",
+                'pe_system_prompt_path': "system_prompt.j2",
                 'pe_api_url': "/api/build_prompt",
                 'pe_tool_service_url': "http://localhost:8000/tool/get_tool_list",
-                'pe_rag_service_url': "http://localhost:8000/rag/query_and_embedding",
-                'pe_rag_top_k': 3,
                 'pe_session_history_service_url': "http://localhost:8000/session/history",
             }
             print(f"使用默认配置: {cls._config}")

@@ -2,6 +2,9 @@
 
 图一乐的提示词引擎
 
+## 重要变更
+- 自本版本起，PE 不再调用或依赖 RAG；RAG 将在主调度器中实现与统一管理。本文档中关于 RAG 的字段与示例仅作历史参考，PE 层不会产生或拼装 RAG 系统消息。
+
 ## Todo
 - [ ] context太大的历史会话丢弃逻辑
 
@@ -30,7 +33,7 @@ python main.py
 
 ### 1. 构建LLM请求 - `/pe/build_request`
 
-**接口描述**：根据用户查询构建完整的LLM请求，包含系统提示词、工具、RAG结果和会话历史。
+**接口描述**：根据用户查询构建完整的LLM请求，包含系统提示词、会话历史和用户查询。
 
 #### 请求结构
 ```json
@@ -52,10 +55,6 @@ python main.py
             {
                 "role": "system",
                 "content": "系统提示词内容..."
-            },
-            {
-                "role": "system", 
-                "content": "RAG检索结果..."
             },
             {
                 "role": "user",
@@ -88,7 +87,7 @@ python main.py
 
 **字段说明**：
 - `llm_request` (object): 符合OpenAI API格式的LLM请求体
-  - `messages` (array): 消息列表，包含系统提示词、RAG结果、历史对话和当前查询
+  - `messages` (array): 消息列表，包含系统提示词、历史对话和当前查询（不再包含 RAG 结果）
   - `tools` (array): 可用工具列表，符合OpenAI工具调用格式
   - `max_tokens` (integer): 最大token限制
 - `estimated_tokens` (integer): 估算的总token数量
@@ -114,10 +113,6 @@ curl -X POST "http://127.0.0.1:25535/pe/build_request" \
             {
                 "role": "system",
                 "content": "你是一个专业的AI助手，帮助用户解答各种问题。"
-            },
-            {
-                "role": "system",
-                "content": "RAG Retrieved Knowledge Chunks:\n1. (score=0.95) source=ml_docs -- 机器学习是人工智能的一个分支..."
             },
             {
                 "role": "user",
@@ -342,13 +337,13 @@ asyncio.run(test_websocket())
         "enable_history": false,          // 是否启用历史记录
         "history_max_rounds": 6,          // 最大历史轮数
         "enable_tools": true,             // 是否启用工具调用
-        "enable_rag": true,               // 是否启用RAG检索
+        "enable_rag": true,               // （已废弃）是否启用RAG检索
         "max_token_budget": 7000,         // token预算上限
         "system_prompt_path": "systemPrompt.txt",  // 系统提示词文件路径
         "tool_service_url": "http://localhost:8000/tool/get_tool_list",     // 工具服务地址
-        "rag_service_url": "http://localhost:8000/rag/query_and_embedding", // RAG服务地址
+        "rag_service_url": "http://localhost:8000/rag/query_and_embedding", // （已废弃）RAG服务地址
         "session_history_service_url": "http://localhost:8000/session/history", // 会话历史服务地址
-        "rag_top_k": 8,                   // RAG检索结果数量
+        "rag_top_k": 8,                   // （已废弃）RAG检索结果数量
         "external_service_timeout": 2     // 外部服务超时时间（秒）
     },
     "connection_pool": {
@@ -364,8 +359,9 @@ asyncio.run(test_websocket())
 PE Server依赖以下外部服务：
 
 1. **工具服务** (`tool_service_url`)：提供可用工具列表
-2. **RAG服务** (`rag_service_url`)：提供知识检索功能
-3. **会话历史服务** (`session_history_service_url`)：提供历史对话记录
+2. **会话历史服务** (`session_history_service_url`)：提供历史对话记录
+
+> 注：RAG 服务由主调度器统一调用与管理，PE 不再直接依赖。
 
 
 ## 📝 注意事项

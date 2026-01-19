@@ -68,21 +68,6 @@ except Exception:
     _HAS_TIKTOKEN = False
 
 
-# ======= util: load system prompt =======
-def load_system_prompt(path: str, session_id: str) -> str:
-    """加载系统提示词，支持缓存"""
-    cached_prompt = asyncio.run(cache_manager.get_cached_prompt(session_id))
-    if cached_prompt:
-        return cached_prompt['system_prompt']
-
-    p = Path(path)
-    if not p.exists():
-        return ""  # 允许为空，但建议警告
-    system_prompt = p.read_text(encoding="utf-8")
-    asyncio.run(cache_manager.cache_prompt(session_id, system_prompt, ""))
-    return system_prompt
-
-
 # ======= util: tool discovery =======
 async def discover_tools(client: httpx.AsyncClient) -> List[Dict[str, Any]]:
     if not config['pe_enable_tools']:
@@ -99,20 +84,6 @@ async def discover_tools(client: httpx.AsyncClient) -> List[Dict[str, Any]]:
         return []
 
 
-# ======= util: call rag =======
-async def call_rag(client: httpx.AsyncClient, query: str, top_k: int) -> list[Any] | dict[str, str] | None:
-    if not config['pe_enable_rag']:
-        return []
-    payload = {"query": query, "top_k": top_k}
-    try:
-        resp = await client.post(config['pe_rag_service_url'], json=payload, timeout=15.0)
-        resp.raise_for_status()
-        data = resp.json()
-        result = data.get("results", []) if isinstance(data, dict) else []
-        return rag_chunks_to_system_prompt(result)
-    except Exception as e:
-        print(f"rag call failed: {e}")
-        return []
 
 
 # ======= util: 获取会话历史记录 =======
@@ -153,20 +124,6 @@ def estimate_tokens_from_messages(messages: List[Dict[str, str]]) -> int:
         return max(1, len(full_text) // 4)
 
 
-# ======= util: build rag system prompt from chunks =======
-def rag_chunks_to_system_prompt(chunks: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
-    if not chunks:
-        return None
-    lines = ["RAG Retrieved Knowledge Chunks:"]
-    for i, c in enumerate(chunks, start=1):
-        chunk_text = c.get("chunk") or c.get("text") or ""
-        source = c.get("source") or c.get("id") or "unknown"
-        score = c.get("score")
-        if score is not None:
-            lines.append(f"{i}. (score={score}) source={source} -- {chunk_text}")
-        else:
-            lines.append(f"{i}. source={source} -- {chunk_text}")
-    return {"role": "system", "content": "\n".join(lines)}
 
 
 # ======= util: trim history to rounds =======
@@ -208,6 +165,7 @@ def compress_assistant_messages(messages: List[Dict[str, str]], target_chars: in
 class BuildRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="会话ID，用于从缓存中获取历史")
     user_query: str = Field(..., description="用户当前 query")
+    system_resources: Optional[str] = Field(None, description="系统中的可变资源")
 
 
 class BuildResponse(BaseModel):
