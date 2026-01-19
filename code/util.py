@@ -68,21 +68,6 @@ except Exception:
     _HAS_TIKTOKEN = False
 
 
-# ======= util: load system prompt =======
-def load_system_prompt(path: str, session_id: str) -> str:
-    """加载系统提示词，支持缓存"""
-    cached_prompt = asyncio.run(cache_manager.get_cached_prompt(session_id))
-    if cached_prompt:
-        return cached_prompt['system_prompt']
-
-    p = Path(Path(__file__).resolve().parent / path)
-    if not p.exists():
-        return ""  # 允许为空，但建议警告
-    system_prompt = p.read_text(encoding="utf-8")
-    asyncio.run(cache_manager.cache_prompt(session_id, system_prompt, ""))
-    return system_prompt
-
-
 # ======= util: tool discovery =======
 async def discover_tools(client: httpx.AsyncClient) -> List[Dict[str, Any]]:
     if not config['pe_enable_tools']:

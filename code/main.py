@@ -1,19 +1,26 @@
 import asyncio
 import json
 import time
-from typing import List, Dict
+from typing import List, Dict, Any
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from config_manager import ConfigManager
-from util import load_system_prompt, estimate_tokens_from_messages, fetch_session_history, BuildRequest, \
+from util import estimate_tokens_from_messages, fetch_session_history, BuildRequest, \
     BuildResponse
+from template_engine import get_template_engine
 
 app = FastAPI(title="Prompt Engine (PE) - FastAPI")
 # 获取配置
 config = ConfigManager.get_config()
+
+# 初始化模板引擎
+# 模板目录在 code/ 目录的同级目录 templates/
+templates_dir = Path(__file__).resolve().parent.parent / "templates"
+engine = get_template_engine(str(templates_dir))
 
 # 创建HTTP客户端连接池
 httpx_client = httpx.AsyncClient(
@@ -46,65 +53,59 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
     start_time = time.time()
 
     try:
-        # 并行获取 system prompt、历史（使用连接池和超时控制）
-        tasks = []
-
-        # system prompt加载（线程池任务）
-        tasks.append(asyncio.to_thread(load_system_prompt, config['pe_system_prompt_path'], session_id))
-        tasks.append(fetch_session_history(httpx_client, session_id, config['pe_history_max_rounds']))
-
-        # 设置超时控制
-        timeout_seconds = config.get('pe_external_service_timeout', 100000000)
-        system_prompt, external_history = await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=True),
-            timeout=timeout_seconds
-        )
-
-        # 处理异常结果
-        if isinstance(system_prompt, Exception):
-            print(f"System prompt loading failed: {system_prompt}")
-            system_prompt = None
-        if isinstance(external_history, Exception):
-            print(f"Session history fetch failed: {external_history}")
-            external_history = None
-
-    except asyncio.TimeoutError:
-        print(f"External services timeout after {timeout_seconds}s")
-        system_prompt = None
-        external_history = None
+        # 获取会话历史
+        external_history = await fetch_session_history(httpx_client, session_id, config['pe_history_max_rounds'])
     except Exception as e:
-        print(f"Error in external service calls: {e}")
-        system_prompt = None
+        print(f"Session history fetch failed: {e}")
         external_history = None
+
+    # ======= 模版烘焙 (Baking) =======
+    # 将系统资源等变量传入模板进行烘焙
+    template_context = {
+        "session_id": session_id,
+        "system_resources": system_resources,
+        "user_query": user_query
+    }
+    
+    system_prompt = engine.render(config['pe_system_prompt_path'], template_context)
 
     # messages 顺序：system, history..., user
     messages: List[Dict[str, str]] = []
     if system_prompt:
-        mes = {"role": "system", "content": system_prompt}
-        if system_resources != "":
-            mes["content"] += f"\n {system_resources}"
-        messages.append(mes)
-
+        messages.append({"role": "system", "content": system_prompt})
 
     # 当前query
     if user_query:
         messages.append({"role": "user", "content": user_query})
 
     if external_history:
-        messages.append({"role": "system", "content": external_history})
+        # 如果历史记录是字符串，转为系统消息（兼容旧逻辑）
+        if isinstance(external_history, str):
+            messages.append({"role": "system", "content": external_history})
+        elif isinstance(external_history, list):
+            # 如果是列表，直接拼接到messages中（通常历史记录应该在user query之前）
+            # 调整顺序：system -> history -> user
+            system_msg = messages[0] if messages and messages[0]["role"] == "system" else None
+            user_msg = messages[-1] if messages and messages[-1]["role"] == "user" else None
+            
+            new_messages = []
+            if system_msg:
+                new_messages.append(system_msg)
+            new_messages.extend(external_history)
+            if user_msg:
+                new_messages.append(user_msg)
+            messages = new_messages
 
     # 估算 token
     estimated_tokens = estimate_tokens_from_messages(messages)
 
     # 构建最终 LLM 请求体（符合 OpenAI Chat style）
     llm_request = {
-        # 模型在 Agent-Core中配置
         "messages": messages,
     }
 
     processing_time = (time.time() - start_time) * 1000
     print(f"Request processed in {processing_time:.2f}ms")
-
     print(f"LLM Request: {llm_request}")
 
     return BuildResponse(
@@ -113,40 +114,9 @@ async def build_request_handler(req: BuildRequest) -> BuildResponse:
     )
 
 
-# ======= API: 简单的会话历史管理（仅示例） =======
-class AppendMessageReq(BaseModel):
-    session_id: str
-    role: str
-    content: str
-
-
 # ======= WebSocket 端点 =======
 @app.websocket("/ws/build_prompt")
 async def websocket_build_prompt(websocket: WebSocket):
-    """
-    WebSocket端点：实时处理build_prompt请求
-    
-    消息格式：
-    {
-        "type": "build_prompt",
-        "request_id": "unique_request_id",
-        "data": {
-            "session_id": "unique_session_id",
-            "system_resources": "系统中的可变资源",
-            "user_query": "用户查询内容",
-            "stream": false
-        }
-    }
-    
-    响应格式：
-    {
-        "type": "build_prompt_response",
-        "request_id": "unique_request_id",
-        "status": "success|error",
-        "data": { ... },
-        "error": "错误信息（如果有）"
-    }
-    """
     await websocket.accept()
     print(f"WebSocket连接已建立: {websocket.client}")
 
@@ -162,11 +132,8 @@ async def websocket_build_prompt(websocket: WebSocket):
                 request_id = message.get("request_id", f"req_{int(time.time() * 1000)}")
 
                 if message_type == "build_prompt":
-                    # 处理build_prompt请求
                     await _handle_build_prompt_websocket(websocket, message.get("data", {}), request_id)
-
                 elif message_type == "ping":
-                    # 处理ping请求
                     pong_response = {
                         "type": "pong",
                         "request_id": request_id,
@@ -174,9 +141,7 @@ async def websocket_build_prompt(websocket: WebSocket):
                         "data": {"timestamp": time.time()}
                     }
                     await websocket.send_text(json.dumps(pong_response))
-
                 else:
-                    # 未知消息类型
                     error_response = {
                         "type": "error",
                         "request_id": request_id,
@@ -186,19 +151,10 @@ async def websocket_build_prompt(websocket: WebSocket):
                     await websocket.send_text(json.dumps(error_response))
 
             except json.JSONDecodeError as e:
-                error_response = {
-                    "type": "error",
-                    "status": "error",
-                    "error": f"JSON解析错误: {e}"
-                }
+                error_response = {"type": "error", "status": "error", "error": f"JSON解析错误: {e}"}
                 await websocket.send_text(json.dumps(error_response))
-
             except Exception as e:
-                error_response = {
-                    "type": "error",
-                    "status": "error",
-                    "error": f"处理消息时出错: {e}"
-                }
+                error_response = {"type": "error", "status": "error", "error": f"处理消息时出错: {e}"}
                 await websocket.send_text(json.dumps(error_response))
 
     except WebSocketDisconnect:
@@ -212,22 +168,18 @@ async def _handle_build_prompt_websocket(websocket: WebSocket, data: dict, reque
     start_time = time.time()
 
     try:
-        # 提取参数
         session_id = data.get("session_id")
         user_query = data.get("user_query", "")
         system_resources = data.get("system_resources", "")
-        stream = data.get("stream", False)
 
         if not user_query:
             raise ValueError("user_query不能为空")
 
         print(f"WebSocket处理build_prompt请求 - 会话: {session_id}, 查询: {user_query}")
 
-        # 复用现有的build_request逻辑
         build_request = BuildRequest(session_id=session_id, user_query=user_query, system_resources=system_resources)
         result = await build_request_handler(build_request)
 
-        # 构建WebSocket响应
         processing_time_ms = (time.time() - start_time) * 1000
 
         response = {
@@ -265,9 +217,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=config['port'],
         workers=config.get('workers', 1),
-        limit_concurrency=config.get('limit_concurrency', 100),
-        backlog=config.get('backlog', 512),
         reload=config.get('reload', True),
         log_level="error",
-        timeout_keep_alive=config.get('timeout_keep_alive', 5),
     )
